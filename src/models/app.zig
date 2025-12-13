@@ -26,6 +26,7 @@ pub const AppModel = struct {
     ui: Ui = .{},
     list_state: listbox.State = .{},
     selected: u32 = 0,
+    debug_log: bool = false,
 
     const Self = @This();
 
@@ -46,6 +47,11 @@ pub const AppModel = struct {
             .KeyDown => |k| {
                 if (k.key == rl.KeyboardKey.q) {
                     self.running = false;
+                } else if (k.key == rl.KeyboardKey.f11) {
+                    // Toggle fullscreen
+                    rl.toggleBorderlessWindowed();
+                } else if (k.key == rl.KeyboardKey.f3) {
+                    self.debug_log = true;
                 }
             },
             else => {},
@@ -58,19 +64,35 @@ pub const AppModel = struct {
         self.ui.beginFrame();
 
         rl.beginDrawing();
-        defer rl.endDrawing();
+        defer {
+            rl.endDrawing();
+            self.debug_log = false;
+        }
 
-        rl.clearBackground(rl.Color.black);
+        rl.clearBackground(rl.Color.dark_gray);
 
-        var items: [10]listbox.Item = undefined;
+        var items: [30]listbox.Item = undefined;
+        var labels: [30][32:0]u8 = undefined;
 
         for (items[0..], 0..) |*it, i| {
+            const label = std.fmt.bufPrintZ(&labels[i], "Item {d}", .{i}) catch "???";
             it.* = .{
                 .id = @as(u32, @intCast(i)),
-                .label = "",
+                .label = label,
             };
         }
-        const r = rl.Rectangle{ .x = 20, .y = 90, .width = 260, .height = 480 };
+
+        // Get window dimensions (handles resizing automatically)
+        const window_h = @as(f32, @floatFromInt(rl.getScreenHeight()));
+
+        // Create rectangle that fills the window height (with some margin)
+        const margin = 20.0;
+        const r = rl.Rectangle{
+            .x = margin,
+            .y = margin,
+            .width = 260,
+            .height = window_h - (margin * 2),
+        };
 
         const res = listbox.listBox(
             &self.ui,
@@ -80,9 +102,17 @@ pub const AppModel = struct {
             self.font,
             items[0..],
             self.selected,
-            .{ .debug_rows = false },
+            .{
+                .debug_rows = false,
+                .debug_log = self.debug_log,
+            },
         );
 
-        if (res.picked) |id| self.selected = id;
+        // Update selection from both click and keyboard navigation
+        if (res.picked) |id| {
+            self.selected = id;
+        } else {
+            self.selected = res.selected_id;
+        }
     }
 };

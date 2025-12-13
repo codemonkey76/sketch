@@ -7,7 +7,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    rl.setConfigFlags(.{ .window_resizable = true });
+
     rl.initWindow(900, 600, "zig gui");
+    rl.setWindowMinSize(500, 400);
     defer rl.closeWindow();
     rl.setTargetFPS(60);
 
@@ -26,7 +29,8 @@ pub fn main() !void {
 
         for (queue.items) |msg| {
             const cmd = model.update(msg);
-            std.debug.print("Got command: {}\n", .{cmd});
+            _ = cmd;
+            // std.debug.print("Got command: {}\n", .{cmd});
         }
 
         try model.view();
@@ -53,5 +57,12 @@ fn pollInput(alloc: std.mem.Allocator, msgs: *std.ArrayList(sketch.models.AppMsg
 
     if (rl.isKeyPressed(rl.KeyboardKey.q)) {
         try msgs.append(alloc, .{ .KeyDown = .{ .key = rl.KeyboardKey.q } });
+    }
+
+    if (rl.isKeyPressed(rl.KeyboardKey.f11)) {
+        try msgs.append(alloc, .{ .KeyDown = .{ .key = rl.KeyboardKey.f11 } });
+    }
+    if (rl.isKeyPressed(rl.KeyboardKey.f3)) {
+        try msgs.append(alloc, .{ .KeyDown = .{ .key = rl.KeyboardKey.f3 } });
     }
 }
