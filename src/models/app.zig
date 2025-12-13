@@ -1,8 +1,9 @@
 const std = @import("std");
 const rl = @import("raylib");
-const Ui = @import("../ui/ui.zig").Ui;
-const listbox = @import("../ui/listbox.zig");
-
+const root = @import("../root.zig");
+const Ui = root.ui.Ui;
+const listbox = root.ui.listbox;
+const canvas = root.ui.canvas;
 pub const AppMsg = union(enum) {
     Quit,
     MoveMouse: struct { x: f32, y: f32 },
@@ -25,6 +26,7 @@ pub const AppModel = struct {
 
     ui: Ui = .{},
     list_state: listbox.State = .{},
+    canvas_state: canvas.State = .{},
     selected: u32 = 0,
     debug_log: bool = false,
 
@@ -83,6 +85,7 @@ pub const AppModel = struct {
         }
 
         // Get window dimensions (handles resizing automatically)
+        const window_w = @as(f32, @floatFromInt(rl.getScreenWidth()));
         const window_h = @as(f32, @floatFromInt(rl.getScreenHeight()));
 
         // Create rectangle that fills the window height (with some margin)
@@ -106,6 +109,22 @@ pub const AppModel = struct {
                 .debug_rows = false,
                 .debug_log = self.debug_log,
             },
+        );
+        // Example: canvas to the right of the listbox
+        const canvas_rect = rl.Rectangle{
+            .x = margin + 260 + 20, // listbox x + listbox w + gap
+            .y = margin,
+            .width = window_w - (margin + 260 + 20) - margin,
+            .height = window_h - (margin * 2),
+        };
+
+        _ = canvas.canvas(
+            &self.ui,
+            &self.canvas_state,
+            3000, // stable id
+            canvas_rect,
+            self.font,
+            .{ .font_px = 18 },
         );
 
         // Update selection from both click and keyboard navigation

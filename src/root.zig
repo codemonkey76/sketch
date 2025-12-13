@@ -8,4 +8,6 @@ pub const ui = struct {
     pub const Ui = ui_mod.Ui;
     pub const WidgetId = ui_mod.WidgetId;
     pub const scrollbar = @import("ui/scrollbar.zig");
+    pub const listbox = @import("ui/listbox.zig");
+    pub const canvas = @import("ui/canvas.zig");
 };

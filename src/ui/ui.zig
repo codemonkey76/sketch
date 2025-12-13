@@ -19,8 +19,6 @@ pub const Ui = struct {
         self.mouse_pressed = rl.isMouseButtonPressed(rl.MouseButton.left);
         self.mouse_released = rl.isMouseButtonReleased(rl.MouseButton.left);
         self.wheel = rl.getMouseWheelMove();
-
-        // if (self.mouse_released) self.active = null;
     }
 
     pub fn hit(self: *Ui, id: WidgetId, r: rl.Rectangle) bool {
