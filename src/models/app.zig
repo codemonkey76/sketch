@@ -10,6 +10,10 @@ const layout = sketch.ui.layout;
 const ConfirmSwitchModal = sketch.ui.modals.confirm_switch;
 const Id = sketch.ui.ids.Id;
 const PathEditor = @import("path_editor.zig").PathEditor;
+const PathList = @import("path_list.zig").PathList;
+
+const ToolbarAction = enum { None, Reload, Save };
+
 const MARGIN = 6;
 pub const AppMsg = union(enum) {
     Quit,
@@ -36,10 +40,9 @@ pub const AppModel = struct {
     mouse_y: f32 = 0,
     font: rl.Font,
     paths: arcade.PathRegistry,
-    path_names: [][]const u8 = &.{},
-    list_items: []listbox.Item = &.{},
 
     editor: PathEditor,
+    path_list: PathList,
     modal: Modal = .None,
 
     ui: Ui = .{},
@@ -57,34 +60,17 @@ pub const AppModel = struct {
             .font = font,
             .paths = arcade.PathRegistry.init(allocator),
             .editor = PathEditor.init(allocator),
+            .path_list = PathList.init(allocator),
         };
 
         m.reloadAll() catch {};
         return m;
     }
 
-    fn rebuildPathNames(self: *Self) !void {
-        // free old buffers (not the strings)
-        if (self.path_names.len != 0) self.allocator.free(self.path_names);
-        if (self.list_items.len != 0) self.allocator.free(self.list_items);
-
-        self.path_names = try self.paths.listPaths(self.allocator);
-
-        self.list_items = try self.allocator.alloc(listbox.Item, self.path_names.len);
-        for (self.path_names, 0..) |name, i| {
-            self.list_items[i] = .{
-                .id = @intCast(i),
-                .label = name,
-            };
-        }
-    }
-
     pub fn deinit(self: *Self) void {
-        if (self.list_items.len != 0) self.allocator.free(self.list_items);
-        if (self.path_names.len != 0) self.allocator.free(self.path_names);
-
         self.paths.deinit();
         self.editor.deinit();
+        self.path_list.deinit();
     }
 
     pub fn update(self: *Self, msg: AppMsg) AppCmd {
@@ -133,24 +119,13 @@ pub const AppModel = struct {
 
         const split_root = layout.splitV(root, 52, MARGIN);
 
-        // Toolbar
-        rl.drawRectangleRec(split_root.top, rl.Color.light_gray);
-        rl.drawRectangleLinesEx(split_root.top, 1, rl.Color.gray);
-
-        var flow = layout.Flow.init(split_root.top);
-        const btn_reload = flow.nextButton(self.font, 18, "Reload");
-
-        const b = button.button(&self.ui, Id.toolbar_reload_btn, btn_reload, self.font, "Reload", true, .{});
-        if (b.clicked) {
-            self.reloadAll() catch {};
+        const act = self.drawToolbar(split_root.top);
+        switch (act) {
+            .None => {},
+            .Reload => try self.reloadAll(),
+            .Save => try self.saveCurrent(),
         }
 
-        const btn_save = flow.nextButton(self.font, 18, "Save");
-        const b2 = button.button(&self.ui, Id.toolbar_save_btn, btn_save, self.font, "Save", self.editor.dirty, .{});
-        if (b2.clicked) {
-            std.debug.print("Saving\n", .{});
-            try self.saveCurrent();
-        }
         const split_main = layout.splitH(split_root.rest, 150, MARGIN);
 
         rl.drawRectangleRec(split_main.left, rl.Color.light_gray);
@@ -166,29 +141,14 @@ pub const AppModel = struct {
             Id.listbox_paths,
             split_main.left,
             self.font,
-            self.list_items,
+            self.path_list.items,
             self.selected,
             .{ .debug_log = self.debug_log },
         );
 
-        if (res.picked) |id| {
-            const clicked_index: u32 = id;
-            const is_different = clicked_index != self.selected;
+        try self.handlePathSelection(res);
 
-            if (!is_different) {
-                // no op
-            } else if (!self.editor.dirty and self.modal == .None) {
-                try self.switchToIndex(clicked_index);
-            } else if (self.editor.dirty and self.modal == .None) {
-                self.modal = .{ .ConfirmSwitch = .{ .target_index = clicked_index } };
-            }
-        } else {
-            if (!self.editor.dirty and self.modal == .None) {
-                if (res.selected_id != self.selected) try self.switchToIndex(res.selected_id);
-            }
-        }
-
-        if (self.modal == .None) {
+        if (!self.isBlockedByModal()) {
             const c = try canvas.canvasEditor(
                 self.allocator,
                 &self.ui,
@@ -202,27 +162,82 @@ pub const AppModel = struct {
             if (c.changed) self.editor.markDirty();
         }
 
+        try self.handleModal();
+    }
+
+    fn acceptConfirmAndSwitch(self: *Self, target: u32) !void {
+        try self.saveCurrent();
+        try self.switchToIndex(target);
+        self.modal = .None;
+    }
+
+    fn discardConfirmAndSwitch(self: *Self, target: u32) !void {
+        try self.switchToIndex(target);
+        self.modal = .None;
+    }
+
+    fn cancelConfirm(self: *Self) void {
+        self.modal = .None;
+    }
+
+    fn handleModal(self: *Self) !void {
         switch (self.modal) {
             .None => {},
             .ConfirmSwitch => |m| {
                 const act = ConfirmSwitchModal.draw(&self.ui, self.font);
                 switch (act) {
                     .None => {},
-                    .Yes => {
-                        try self.saveCurrent();
-                        try self.switchToIndex(m.target_index);
-                        self.modal = .None;
-                    },
-                    .No => {
-                        try self.switchToIndex(m.target_index);
-                        self.modal = .None;
-                    },
-                    .Cancel => {
-                        self.modal = .None;
-                    },
+                    .Yes => try self.acceptConfirmAndSwitch(m.target_index),
+                    .No => try self.discardConfirmAndSwitch(m.target_index),
+                    .Cancel => self.cancelConfirm(),
                 }
             },
         }
+    }
+
+    fn isBlockedByModal(self: *const Self) bool {
+        return self.modal != .None;
+    }
+
+    fn handlePathSelection(self: *Self, res: listbox.Result) !void {
+        if (self.isBlockedByModal()) return;
+
+        if (res.picked) |id| {
+            const clicked_index: u32 = id;
+            if (clicked_index == self.selected) return;
+
+            if (!self.editor.dirty) {
+                try self.switchToIndex(clicked_index);
+            } else {
+                self.modal = .{ .ConfirmSwitch = .{ .target_index = clicked_index } };
+            }
+            return;
+        }
+
+        // keyboard/nav selection changes
+        if (!self.editor.dirty and res.selected_id != self.selected) {
+            try self.switchToIndex(res.selected_id);
+        }
+    }
+
+    fn drawToolbar(self: *Self, top: rl.Rectangle) ToolbarAction {
+        // Toolbar chrome
+        rl.drawRectangleRec(top, rl.Color.light_gray);
+        rl.drawRectangleLinesEx(top, 1, rl.Color.gray);
+
+        var flow = layout.Flow.init(top);
+
+        // Reload
+        const btn_reload = flow.nextButton(self.font, 18, "Reload");
+        const r = button.button(&self.ui, Id.toolbar_reload_btn, btn_reload, self.font, "Reload", true, .{});
+        if (r.clicked) return .Reload;
+
+        // Save
+        const btn_save = flow.nextButton(self.font, 18, "Save");
+        const s = button.button(&self.ui, Id.toolbar_save_btn, btn_save, self.font, "Save", self.editor.dirty, .{});
+        if (s.clicked) return .Save;
+
+        return .None;
     }
 
     fn resetEditorState(self: *Self) void {
@@ -240,10 +255,10 @@ pub const AppModel = struct {
         self.paths.deinit();
         self.paths = arcade.PathRegistry.init(self.allocator);
         try self.paths.loadFromDirectory("assets/paths");
-        try self.rebuildPathNames();
+        try self.path_list.rebuild(&self.paths);
 
         // select first path if present
-        if (self.path_names.len > 0) {
+        if (self.path_list.names.len > 0) {
             try self.switchToIndex(0);
         }
     }
@@ -251,7 +266,7 @@ pub const AppModel = struct {
     fn switchToIndex(self: *Self, idx: u32) !void {
         self.selected = idx;
 
-        const name = self.path_names[@intCast(idx)];
+        const name = self.path_list.names[@intCast(idx)];
         const path = self.paths.getPath(name) orelse return;
 
         try self.editor.load(name, path);
@@ -260,7 +275,7 @@ pub const AppModel = struct {
     fn saveCurrent(self: *Self) !void {
         const name = self.editor.current_name orelse return;
         try self.paths.savePath(name, self.editor.definition());
-        try self.rebuildPathNames();
+        try self.path_list.rebuild(&self.paths);
         self.editor.dirty = false;
     }
 };
