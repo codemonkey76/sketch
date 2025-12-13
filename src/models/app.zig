@@ -7,9 +7,9 @@ const listbox = sketch.ui.listbox;
 const canvas = sketch.ui.canvas;
 const button = sketch.ui.button;
 const layout = sketch.ui.layout;
-
-const ModalAction = enum { None, Yes, No, Cancel };
-
+const ConfirmSwitchModal = sketch.ui.modals.confirm_switch;
+const Id = sketch.ui.ids.Id;
+const PathEditor = @import("path_editor.zig").PathEditor;
 const MARGIN = 6;
 pub const AppMsg = union(enum) {
     Quit,
@@ -37,10 +37,9 @@ pub const AppModel = struct {
     font: rl.Font,
     paths: arcade.PathRegistry,
     path_names: [][]const u8 = &.{},
+    list_items: []listbox.Item = &.{},
 
-    current_path_name: ?[]const u8 = null,
-    edit_points: std.ArrayList(arcade.Vec2) = .{},
-    dirty: bool = false,
+    editor: PathEditor,
     modal: Modal = .None,
 
     ui: Ui = .{},
@@ -52,67 +51,40 @@ pub const AppModel = struct {
 
     const Self = @This();
 
-    fn drawConfirmSwitchModal(self: *Self) ModalAction {
-        const sw = @as(f32, @floatFromInt(rl.getScreenWidth()));
-        const sh = @as(f32, @floatFromInt(rl.getScreenHeight()));
-
-        rl.drawRectangle(0, 0, @intFromFloat(sw), @intFromFloat(sh), rl.fade(rl.Color.black, 0.45));
-
-        const dlg_w: f32 = 420;
-        const dlg_h: f32 = 160;
-        const dlg = rl.Rectangle{
-            .x = (sw - dlg_w) * 0.5,
-            .y = (sh - dlg_h) * 0.5,
-            .width = dlg_w,
-            .height = dlg_h,
-        };
-
-        const msg = "Save changes?";
-        rl.drawTextEx(self.font, msg, .{ .x = dlg.x + 18, .y = dlg.y + 18 }, 20, 0, rl.Color.black);
-
-        const row = rl.Rectangle{
-            .x = dlg.x + 18,
-            .y = dlg.y + dlg.height - 56,
-            .width = dlg.width - 36,
-            .height = 40,
-        };
-
-        const bw: f32 = 110;
-        const gap: f32 = 10;
-
-        const r_yes = rl.Rectangle{ .x = row.x, .y = row.y, .width = bw, .height = row.height };
-        const r_no = rl.Rectangle{ .x = row.x + bw + gap, .y = row.y, .width = bw, .height = row.height };
-        const r_can = rl.Rectangle{ .x = row.x + (bw + gap) * 2, .y = row.y, .width = bw, .height = row.height };
-
-        if (button.button(&self.ui, 90_000, r_yes, self.font, "Yes", true, .{}).clicked) return .Yes;
-        if (button.button(&self.ui, 90_001, r_no, self.font, "No", true, .{}).clicked) return .No;
-        if (button.button(&self.ui, 90_002, r_can, self.font, "Cancel", true, .{}).clicked) return .Cancel;
-
-        return .None;
-    }
     pub fn init(allocator: std.mem.Allocator, font: rl.Font) AppModel {
         var m: AppModel = .{
             .allocator = allocator,
             .font = font,
             .paths = arcade.PathRegistry.init(allocator),
+            .editor = PathEditor.init(allocator),
         };
 
-        m.paths.loadFromDirectory("assets/paths") catch {};
-        m.rebuildPathNames() catch {};
-
+        m.reloadAll() catch {};
         return m;
     }
+
     fn rebuildPathNames(self: *Self) !void {
-        // free old list buffer (not the strings)
+        // free old buffers (not the strings)
         if (self.path_names.len != 0) self.allocator.free(self.path_names);
+        if (self.list_items.len != 0) self.allocator.free(self.list_items);
 
         self.path_names = try self.paths.listPaths(self.allocator);
+
+        self.list_items = try self.allocator.alloc(listbox.Item, self.path_names.len);
+        for (self.path_names, 0..) |name, i| {
+            self.list_items[i] = .{
+                .id = @intCast(i),
+                .label = name,
+            };
+        }
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.list_items.len != 0) self.allocator.free(self.list_items);
         if (self.path_names.len != 0) self.allocator.free(self.path_names);
-        self.edit_points.deinit(self.allocator);
+
         self.paths.deinit();
+        self.editor.deinit();
     }
 
     pub fn update(self: *Self, msg: AppMsg) AppCmd {
@@ -168,26 +140,13 @@ pub const AppModel = struct {
         var flow = layout.Flow.init(split_root.top);
         const btn_reload = flow.nextButton(self.font, 18, "Reload");
 
-        const b = button.button(&self.ui, 10, btn_reload, self.font, "Reload", true, .{});
+        const b = button.button(&self.ui, Id.toolbar_reload_btn, btn_reload, self.font, "Reload", true, .{});
         if (b.clicked) {
-            // editor atate
-            self.edit_points.clearRetainingCapacity();
-            self.dirty = false;
-            self.modal = .None;
-            self.current_path_name = null;
-            self.selected = 0;
-
-            self.paths.deinit();
-            self.paths = arcade.PathRegistry.init(self.allocator);
-            self.paths.loadFromDirectory("assets/paths") catch {};
-            self.rebuildPathNames() catch {};
-
-            if (self.path_names.len > 0) {
-                self.switchToIndex(0) catch {};
-            }
+            self.reloadAll() catch {};
         }
+
         const btn_save = flow.nextButton(self.font, 18, "Save");
-        const b2 = button.button(&self.ui, 11, btn_save, self.font, "Save", self.dirty, .{});
+        const b2 = button.button(&self.ui, Id.toolbar_save_btn, btn_save, self.font, "Save", self.editor.dirty, .{});
         if (b2.clicked) {
             std.debug.print("Saving\n", .{});
             try self.saveCurrent();
@@ -201,23 +160,13 @@ pub const AppModel = struct {
         rl.drawRectangleLinesEx(split_main.rest, 1, rl.Color.gray);
 
         // Build listbox items from registry names
-        const count = self.path_names.len;
-        var items = try self.allocator.alloc(listbox.Item, count);
-        defer self.allocator.free(items);
-
-        for (self.path_names, 0..) |name, i| {
-            items[i] = .{
-                .id = @intCast(i),
-                .label = name,
-            };
-        }
         const res = listbox.listBox(
             &self.ui,
             &self.list_state,
-            2000,
+            Id.listbox_paths,
             split_main.left,
             self.font,
-            items,
+            self.list_items,
             self.selected,
             .{ .debug_log = self.debug_log },
         );
@@ -228,13 +177,13 @@ pub const AppModel = struct {
 
             if (!is_different) {
                 // no op
-            } else if (!self.dirty and self.modal == .None) {
+            } else if (!self.editor.dirty and self.modal == .None) {
                 try self.switchToIndex(clicked_index);
-            } else if (self.dirty and self.modal == .None) {
+            } else if (self.editor.dirty and self.modal == .None) {
                 self.modal = .{ .ConfirmSwitch = .{ .target_index = clicked_index } };
             }
         } else {
-            if (!self.dirty and self.modal == .None) {
+            if (!self.editor.dirty and self.modal == .None) {
                 if (res.selected_id != self.selected) try self.switchToIndex(res.selected_id);
             }
         }
@@ -244,19 +193,19 @@ pub const AppModel = struct {
                 self.allocator,
                 &self.ui,
                 &self.canvas_state,
-                3000,
+                Id.canvas_editor,
                 split_main.rest,
                 self.font,
-                &self.edit_points,
+                &self.editor.points,
                 .{},
             );
-            if (c.changed) self.dirty = true;
+            if (c.changed) self.editor.markDirty();
         }
 
         switch (self.modal) {
             .None => {},
             .ConfirmSwitch => |m| {
-                const act = self.drawConfirmSwitchModal();
+                const act = ConfirmSwitchModal.draw(&self.ui, self.font);
                 switch (act) {
                     .None => {},
                     .Yes => {
@@ -276,27 +225,42 @@ pub const AppModel = struct {
         }
     }
 
+    fn resetEditorState(self: *Self) void {
+        self.editor.points.clearRetainingCapacity();
+        self.editor.dirty = false;
+        self.modal = .None;
+        self.editor.current_name = null;
+        self.selected = 0;
+    }
+
+    fn reloadAll(self: *Self) !void {
+        self.resetEditorState();
+
+        // rebuild registry
+        self.paths.deinit();
+        self.paths = arcade.PathRegistry.init(self.allocator);
+        try self.paths.loadFromDirectory("assets/paths");
+        try self.rebuildPathNames();
+
+        // select first path if present
+        if (self.path_names.len > 0) {
+            try self.switchToIndex(0);
+        }
+    }
+
     fn switchToIndex(self: *Self, idx: u32) !void {
         self.selected = idx;
 
         const name = self.path_names[@intCast(idx)];
-        self.current_path_name = name;
+        const path = self.paths.getPath(name) orelse return;
 
-        self.edit_points.clearRetainingCapacity();
-        if (self.paths.getPath(name)) |p| {
-            try self.edit_points.appendSlice(self.allocator, p.control_points);
-        }
-
-        self.dirty = false;
+        try self.editor.load(name, path);
     }
 
     fn saveCurrent(self: *Self) !void {
-        const name = self.current_path_name orelse return;
-
-        const def = arcade.PathDefinition{ .control_points = self.edit_points.items };
-        try self.paths.savePath(name, def);
-
+        const name = self.editor.current_name orelse return;
+        try self.paths.savePath(name, self.editor.definition());
         try self.rebuildPathNames();
-        self.dirty = false;
+        self.editor.dirty = false;
     }
 };
