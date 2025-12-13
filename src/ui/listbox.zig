@@ -51,7 +51,7 @@ pub const Params = struct {
 
 pub const Item = struct {
     id: u32,
-    label: [:0]const u8,
+    label: []const u8,
 };
 
 pub const Result = struct {
@@ -332,10 +332,12 @@ fn drawRows(
                 it.label
             else
                 (std.fmt.bufPrintZ(&buf, "{d}", .{it.id}) catch "");
+        var zbuf: [256:0]u8 = undefined;
+        const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{s}) catch "???";
 
         rl.drawTextEx(
             font,
-            s,
+            z,
             .{ .x = row_rect.x + p.pad_x, .y = text_y },
             p.font_px,
             0.0,

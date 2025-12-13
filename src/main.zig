@@ -18,6 +18,7 @@ pub fn main() !void {
     rl.setTextureFilter(font.texture, rl.TextureFilter.point);
 
     var model = sketch.models.AppModel.init(alloc, font);
+    defer model.deinit();
 
     var queue = std.ArrayList(sketch.models.AppMsg).empty;
     defer queue.deinit(alloc);
