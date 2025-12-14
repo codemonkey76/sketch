@@ -31,7 +31,6 @@ pub fn main() !void {
         for (queue.items) |msg| {
             const cmd = model.update(msg);
             _ = cmd;
-            // std.debug.print("Got command: {}\n", .{cmd});
         }
 
         try model.view();
