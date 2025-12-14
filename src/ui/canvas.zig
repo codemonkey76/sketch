@@ -140,40 +140,27 @@ fn drawControlPolygon(vp: rl.Rectangle, pts: []const arcade.Vec2) void {
 }
 
 fn drawBezierCurve(vp: rl.Rectangle, pts: []const arcade.Vec2) void {
-    // Need at least 4 points for 1 cubic
-    if (pts.len < 4) return;
+    if (pts.len < 2) return;
 
-    // The library expects 1 + 3*n control points (4, 7, 10, ...)
-    // If you’re mid-edit and don’t match, just draw what we can.
-    const usable_len: usize = 1 + ((pts.len - 1) / 3) * 3; // clamp down to valid length
-    if (usable_len < 4) return;
+    const def = arcade.PathDefinition{ .control_points = pts };
 
-    const def = arcade.PathDefinition{ .control_points = pts[0..usable_len] };
-    const seg_count = def.getSegmentCount();
-    if (seg_count == 0) return;
-
-    // sampling density: scale with viewport size (tweak)
-    const steps_per_seg: usize = @max(12, @as(usize, @intFromFloat(@floor(@max(vp.width, vp.height) / 20.0))));
+    const steps: usize = @max(12, @as(usize, @intFromFloat(@floor(@max(vp.width, vp.height) / 20.0))));
 
     var prev: ?rl.Vector2 = null;
 
-    var s: usize = 0;
-    while (s < seg_count) : (s += 1) {
-        const seg = def.getSegment(s) orelse continue;
+    var i: usize = 0;
+    while (i <= steps) : (i += 1) {
+        const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(steps));
+        const p = def.getPosition(t);
+        const sp = pathToScreen(vp, p);
 
-        var i: usize = 0;
-        while (i <= steps_per_seg) : (i += 1) {
-            const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(steps_per_seg));
-            const p = seg.evaluate(t);
-            const sp = pathToScreen(vp, p);
-
-            if (prev) |a| {
-                rl.drawLineEx(a, sp, 3, rl.Color.yellow);
-            }
-            prev = sp;
+        if (prev) |a| {
+            rl.drawLineEx(a, sp, 3, rl.Color.yellow);
         }
+        prev = sp;
     }
 }
+
 fn hitPoint(vp: rl.Rectangle, pts: []const arcade.Vec2, m: rl.Vector2, hit_r: f32) ?usize {
     const hit_r2 = hit_r * hit_r;
     var best_i: ?usize = null;
