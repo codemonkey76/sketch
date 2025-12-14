@@ -4,7 +4,7 @@ const arcade = @import("arcade_lib");
 pub const PathEditor = struct {
     allocator: std.mem.Allocator,
 
-    current_name: ?[]const u8 = null,
+    current_name: ?[]u8 = null,
     points: std.ArrayList(arcade.Vec2),
     dirty: bool = false,
 
@@ -16,11 +16,14 @@ pub const PathEditor = struct {
     }
 
     pub fn deinit(self: *PathEditor) void {
+        if (self.current_name) |n| self.allocator.free(n);
         self.points.deinit(self.allocator);
     }
 
     pub fn load(self: *PathEditor, name: []const u8, path: arcade.PathDefinition) !void {
-        self.current_name = name;
+        if (self.current_name) |n| self.allocator.free(n);
+        self.current_name = try self.allocator.dupe(u8, name);
+
         self.points.clearRetainingCapacity();
         try self.points.appendSlice(self.allocator, path.control_points);
         self.dirty = false;
@@ -31,6 +34,7 @@ pub const PathEditor = struct {
     }
 
     pub fn clear(self: *PathEditor) void {
+        if (self.current_name) |n| self.allocator.free(n);
         self.current_name = null;
         self.points.clearRetainingCapacity();
         self.dirty = false;
